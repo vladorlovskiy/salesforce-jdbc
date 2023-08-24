@@ -4,7 +4,9 @@ import com.ascendix.jdbc.salesforce.ForceDriver;
 import com.ascendix.jdbc.salesforce.connection.ForceConnection;
 import com.ascendix.jdbc.salesforce.delegates.PartnerService;
 import com.ascendix.jdbc.salesforce.resultset.CachedResultSet;
+import com.ascendix.jdbc.salesforce.resultset.CachedResultSetMetaData;
 import com.ascendix.jdbc.salesforce.statement.ForcePreparedStatement;
+import com.sforce.ws.ConnectorConfig;
 
 import java.io.Serializable;
 import java.sql.Connection;
@@ -26,19 +28,24 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
     public static final String DEFAULT_SCHEMA = "Salesforce";
     public static final String DEFAULT_CATALOG = "database";
     public static final String DEFAULT_TABLE_TYPE = "TABLE";
+    public static final String ENTITY_TABLE_TYPE = "ENTITY";
 
     private transient PartnerService partnerService;
     private transient ForceConnection connection;
     private List<Table> tablesCache;
     private int counter;
-
+    private Properties connInfo = new Properties();
     public ForceDatabaseMetaData(ForceConnection connection) {
         this.connection = connection;
         this.partnerService = new PartnerService(connection.getPartnerConnection());
-    }
+        ConnectorConfig connectorConfig = this.connection.getPartnerConnection().getConfig();
+        connInfo.setProperty("config.auth_endpoint", connectorConfig.getAuthEndpoint());
+        connInfo.setProperty("config.rest_endpoint", Objects.toString(connectorConfig.getRestEndpoint(),""));
+        connInfo.setProperty("config.service_endpoint", connectorConfig.getServiceEndpoint());
+     }
+
 
     private ForceDatabaseMetaData() {
-        this.connection = connection;
         this.partnerService = null;
     }
 
@@ -47,13 +54,18 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
         logger.info("[Meta] getTables catalog="+catalog+" schema="+schemaPattern+" table="+tableNamePattern);
         List<ColumnMap<String, Object>> rows = new ArrayList<>();
         ColumnMap<String, Object> firstRow = null;
+        List<String> typeList = types == null ? null : Arrays.asList(types);
         for (Table table : getTables()) {
-            if(tableNamePattern == null || "%".equals(tableNamePattern.trim()) || table.getName().equalsIgnoreCase(tableNamePattern)) {
+            String name = table.getName();
+            boolean queryable = table.isQueryable();
+
+            if( (typeList == null || (queryable && typeList.contains(DEFAULT_TABLE_TYPE))) &&
+                (tableNamePattern == null || "%".equals(tableNamePattern.trim()) || name.equalsIgnoreCase(tableNamePattern)) ) {
                 ColumnMap<String, Object> map = new ColumnMap<>();
                 map.put("TABLE_CAT", DEFAULT_CATALOG);
                 map.put("TABLE_SCHEM", DEFAULT_SCHEMA);
-                map.put("TABLE_NAME", table.getName());
-                map.put("TABLE_TYPE", DEFAULT_TABLE_TYPE);
+                map.put("TABLE_NAME", name);
+                map.put("TABLE_TYPE", queryable ? DEFAULT_TABLE_TYPE : ENTITY_TABLE_TYPE);
                 map.put("REMARKS", table.getComments());
                 map.put("TYPE_CAT", null);
                 map.put("TYPE_SCHEM", null);
@@ -119,7 +131,7 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
                     put("SCOPE_CATLOG", null);
                     put("SCOPE_SCHEMA", null);
                     put("SCOPE_TABLE", null);
-                    put("SOURCE_DATA_TYPE", column.getType());
+                    put("SOURCE_DATA_TYPE", null);
                     put("CASE_SENSITIVE", 0);
                     put("NULLABLE",
                             column.isNillable() ? DatabaseMetaData.columnNullable : DatabaseMetaData.columnNoNulls);
@@ -180,7 +192,7 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
                         map.put("TABLE_SCHEM", DEFAULT_SCHEMA);
                         map.put("TABLE_NAME", table.getName());
                         map.put("COLUMN_NAME", "" + column.getName());
-                        map.put("KEY_SEQ", 0);
+                        map.put("KEY_SEQ", Integer.valueOf(1).shortValue());
                         map.put("PK_NAME", "FakePK" + counter);
                         maps.add(map);
                         if (firstRow == null) {
@@ -212,12 +224,12 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
                         map.put("FKTABLE_SCHEM", null);
                         map.put("FKTABLE_NAME", tableName);
                         map.put("FKCOLUMN_NAME", column.getName());
-                        map.put("KEY_SEQ", counter);
-                        map.put("UPDATE_RULE", 0);
-                        map.put("DELETE_RULE", 0);
+                        map.put("KEY_SEQ", Integer.valueOf(counter).shortValue());
+                        map.put("UPDATE_RULE", Integer.valueOf(0).shortValue());
+                        map.put("DELETE_RULE", Integer.valueOf(0).shortValue());
                         map.put("FK_NAME", "FakeFK" + counter);
                         map.put("PK_NAME", "FakePK" + counter);
-                        map.put("DEFERRABILITY", 0);
+                        map.put("DEFERRABILITY", Integer.valueOf(0).shortValue());
                         counter++;
                         maps.add(map);
                         if (firstRow == null) {
@@ -336,9 +348,9 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
             row.put("LITERAL_PREFIX", null);
             row.put("LITERAL_SUFFIX", null);
             row.put("CREATE_PARAMS", null);
-            row.put("NULLABLE", 1);
-            row.put("CASE_SENSITIVE", 0);
-            row.put("SEARCHABLE", 3);
+            row.put("NULLABLE", Integer.valueOf(1).shortValue());
+            row.put("CASE_SENSITIVE", true);
+            row.put("SEARCHABLE", Integer.valueOf(3).shortValue());
             row.put("UNSIGNED_ATTRIBUTE", false);
             row.put("FIXED_PREC_SCALE", false);
             row.put("AUTO_INCREMENT", false);
@@ -1352,8 +1364,36 @@ public class ForceDatabaseMetaData implements DatabaseMetaData, Serializable {
     @Override
     public ResultSet getClientInfoProperties() throws SQLException {
         // TODO Auto-generated method stub
-        logger.info("[Meta] getClientInfoProperties requested NOT_IMPLEMENTED");
-        return new CachedResultSet(Collections.EMPTY_LIST, null);
+        //logger.info("[Meta] getClientInfoProperties requested NOT_IMPLEMENTED");
+
+        List<ColumnMap<String, Object>> rows = new ArrayList<>();
+        this.connInfo.forEach((k,v)-> {
+            ColumnMap<String, Object> row = new ColumnMap<>();
+            row.add( "property", k);
+            row.add( "value", v);
+            rows.add(row);
+        });
+        return new CachedResultSet(rows, new CachedResultSetMetaData() {
+            @Override
+            public int getColumnCount() throws SQLException {return 2;}
+            @Override
+            public String getColumnLabel(int column) throws SQLException {
+                return this.getColumnName(column);
+            }
+            public String getColumnName(int column) throws SQLException {
+                switch (column) {
+                    case 1: return "property";
+                    case 2: return "value";
+                default: return null;
+                }
+            }
+            public int getColumnType(int column) throws SQLException {
+                return java.sql.Types.VARCHAR;
+            }
+            public String getColumnTypeName(int column) throws SQLException {
+                return "text";
+            }
+        });
     }
 
     @Override

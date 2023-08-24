@@ -47,7 +47,7 @@ public class PartnerService {
         List<Column> columns = fields.stream()
                 .map(this::convertToColumn)
                 .collect(Collectors.toList());
-        return new Table(so.getName(), null, columns);
+        return new Table(so.getName(), null, columns, so.isQueryable());
     }
 
     private Column convertToColumn(Field field) {
@@ -128,6 +128,14 @@ public class PartnerService {
         return result;
     }
 
+    private List<List> extractQueryResultData(QueryResult qr) {
+        List<XmlObject> rows = Arrays.asList(qr.getRecords());
+        // extract the root entity name
+        Object rootEntityName = rows.stream().filter(xmlo -> "type".equals(xmlo.getName().getLocalPart())).findFirst().map(XmlObject::getValue).orElse(null);
+        String parentName = null;
+        return removeServiceInfo(rows, parentName, rootEntityName==null ? null : (String)rootEntityName);
+    }
+
     public List<List> query(String soql, List<FieldDef> expectedSchema) throws ConnectionException {
         logger.info("[PartnerService] query "+soql);
         List<List> resultRows = Collections.synchronizedList(new LinkedList<>());
@@ -135,15 +143,30 @@ public class PartnerService {
         do {
             queryResult = queryResult == null ? partnerConnection.query(soql)
                     : partnerConnection.queryMore(queryResult.getQueryLocator());
-
-            List<XmlObject> rows = Arrays.asList(queryResult.getRecords());
-            // extract the root entity name
-            Object rootEntityName = rows.stream().filter(xmlo -> "type".equals(xmlo.getName().getLocalPart())).findFirst().map(XmlObject::getValue).orElse(null);
-            String parentName = null;
-            resultRows.addAll(removeServiceInfo(rows, parentName, rootEntityName==null ? null : (String)rootEntityName));
+            resultRows.addAll(extractQueryResultData(queryResult));
         } while (!queryResult.isDone());
 
         return PartnerResultToCrtesianTable.expand(resultRows, expectedSchema);
+    }
+
+    public Map.Entry<List<List>,String> queryStart(String soql, List<FieldDef> expectedSchema) throws ConnectionException {
+        logger.info("[PartnerService] queryStart "+soql);
+        QueryResult queryResult = partnerConnection.query(soql);
+        String queryLocator =  queryResult.isDone() ? null : queryResult.getQueryLocator();
+        return new AbstractMap.SimpleEntry<List<List>,String>(
+            Collections.unmodifiableList(extractQueryResultData(queryResult))
+            , queryLocator
+        );
+    }
+
+    public Map.Entry<List<List>,String> queryMore(String queryLocator, List<FieldDef> expectedSchema) throws ConnectionException {
+        logger.info("[PartnerService] queryMore "+queryLocator);
+        QueryResult queryResult = partnerConnection.queryMore(queryLocator);
+        queryLocator =  queryResult.isDone() ? null : queryResult.getQueryLocator();
+        return new AbstractMap.SimpleEntry<List<List>,String>(
+            Collections.unmodifiableList(extractQueryResultData(queryResult))
+            , queryLocator
+        );
     }
 
     private List<List> removeServiceInfo(List<XmlObject> rows, String parentName, String rootEntityName) {

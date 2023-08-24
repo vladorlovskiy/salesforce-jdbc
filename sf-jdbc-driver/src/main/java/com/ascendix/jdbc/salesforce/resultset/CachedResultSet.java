@@ -41,6 +41,8 @@ public class CachedResultSet implements ResultSet, Serializable {
     private ResultSetMetaData metadata;
     private SQLWarning warningsChain;
 
+    private transient Iterator<List<ColumnMap<String, Object>>> rowSupplier;
+
     public CachedResultSet(List<ColumnMap<String, Object>> rows) {
         this.rows = new ArrayList(rows);
     }
@@ -63,8 +65,13 @@ public class CachedResultSet implements ResultSet, Serializable {
         this(new ArrayList(Arrays.asList(singleRow)), metadata);
     }
 
+    public CachedResultSet(Iterator<List<ColumnMap<String, Object>>> rowSupplier, ResultSetMetaData metadata) {
+        this(metadata);
+        this.rowSupplier = rowSupplier;
+    }
+
     public Object getObject(String columnName) throws SQLException {
-        return rows.get(getIndex()).get(columnName.toUpperCase());
+        return rows.get(getIndex()).get(columnName);
     }
 
     public Object getObject(int columnIndex) throws SQLException {
@@ -99,6 +106,7 @@ public class CachedResultSet implements ResultSet, Serializable {
     }
 
     public boolean first() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         if (rows.size() > 0) {
             setIndex(0);
             return true;
@@ -108,6 +116,7 @@ public class CachedResultSet implements ResultSet, Serializable {
     }
 
     public boolean last() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         if (rows.size() > 0) {
             setIndex(rows.size() - 1);
             return true;
@@ -116,28 +125,41 @@ public class CachedResultSet implements ResultSet, Serializable {
         }
     }
 
+    private boolean nextSupplied() throws SQLException {
+        if (this.rowSupplier == null || !this.rowSupplier.hasNext()) {
+            this.rows = Collections.emptyList();
+            return false;
+        }
+        this.rows = this.rowSupplier.next();
+        this.index = null;
+        return !rows.isEmpty();
+    }
+
     public boolean next() throws SQLException {
         if (rows.size() > 0) {
             increaseIndex();
-            return getIndex() < rows.size();
-        } else {
-            return false;
+            if (getIndex() < rows.size()) return true;
         }
+        return nextSupplied() ? next() : false;
     }
 
     public boolean isAfterLast() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         return rows.size() > 0 && getIndex() == rows.size();
     }
 
     public boolean isBeforeFirst() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         return rows.size() > 0 && getIndex() == -1;
     }
 
     public boolean isFirst() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         return rows.size() > 0 && getIndex() == 0;
     }
 
     public boolean isLast() throws SQLException {
+        if (this.rowSupplier != null) throw new UnsupportedOperationException("Not implemented yet.");;
         return rows.size() > 0 && getIndex() == rows.size() - 1;
     }
 
@@ -170,7 +192,7 @@ public class CachedResultSet implements ResultSet, Serializable {
         }
 
         public Optional<T> parse(String columnName) {
-            Object value = rows.get(getIndex()).get(columnName.toUpperCase());
+            Object value = rows.get(getIndex()).get(columnName);
             return parse(value);
         }
 

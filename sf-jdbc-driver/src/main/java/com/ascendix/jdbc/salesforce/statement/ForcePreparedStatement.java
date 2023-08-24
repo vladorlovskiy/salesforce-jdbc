@@ -50,7 +50,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class ForcePreparedStatement implements PreparedStatement {
+public class ForcePreparedStatement implements PreparedStatement, Iterator<List<ColumnMap<String,Object>>> {
 
     private static final String SF_JDBC_DRIVER_NAME = "SF JDBC driver";
     private static final Logger logger = Logger.getLogger(SF_JDBC_DRIVER_NAME);
@@ -78,6 +78,8 @@ public class ForcePreparedStatement implements PreparedStatement {
     private ResultSet resultSet;
     private boolean resultSetReturned = false;
     private SQLWarning warnings = new SQLWarning();
+    private boolean neverQueriedMore;
+    private String queryMoreLocator;
 
     // TODO: Join caches and move it to ForceConnection class. Divide to session
     // and static global cache.
@@ -98,7 +100,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     public ForcePreparedStatement(ForceConnection connection, String soql) {
-        logger.info("[PrepStat] constructor soql IMPLEMENTED "+soql);
+        logger.info("[PrepStat] constructor soql IMPLEMENTED");
         this.connection = connection;
         this.cacheMode = getCacheMode(soql);
         this.soqlQuery = removeCacheHints(soql);
@@ -177,6 +179,10 @@ public class ForcePreparedStatement implements PreparedStatement {
         }
         try {
             List<FieldDef> fieldDefinitions = getRootEntityFieldDefinitions();
+            if (cacheMode == CacheMode.NO_CACHE) {
+                this.neverQueriedMore = true;
+                return new CachedResultSet(this, getMetaData());
+            }
             List<List> forceQueryResult = getPartnerService().query(soqlQuery, fieldDefinitions);
             if (!forceQueryResult.isEmpty()) {
                 List<ColumnMap<String, Object>> maps = Collections.synchronizedList(new LinkedList<>());
@@ -189,9 +195,37 @@ public class ForcePreparedStatement implements PreparedStatement {
             throw new SQLException(e);
         }
     }
+    @Override
+    public boolean hasNext() {
+        return this.neverQueriedMore || this.queryMoreLocator != null;
+    }
+    @Override
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public List<ColumnMap<String, Object>> next() {
+        try {
+            Map.Entry<List<List>, String> resultEntry;
+            if (this.neverQueriedMore) {
+                this.neverQueriedMore = false;
+                String preparedSoql  = prepareQuery();
+                resultEntry  = this.getPartnerService().queryStart(preparedSoql, getRootEntityFieldDefinitions());
+            } else if (this.queryMoreLocator != null) {
+                resultEntry = getPartnerService().queryMore(this.queryMoreLocator, getRootEntityFieldDefinitions());
+            } else {
+                return Collections.emptyList();
+            }
+            this.queryMoreLocator = resultEntry.getValue();
+            List result = Collections.synchronizedList(new LinkedList<>());
+            Optional.ofNullable(resultEntry.getKey())
+                .orElseGet(Collections::emptyList)
+                .forEach(record -> result.add(convertToColumnMap(record)));
+            return result;
+        } catch(ConnectionException | SOQLParsingException e) {
+            throw new RuntimeException( new SQLException(e));
+        }
+    }
 
     private String prepareQuery() {
-        logger.info("[PrepStat] prepareQuery IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] prepareQuery IMPLEMENTED"+soqlQuery);
         soqlQueryOriginal = soqlQuery;
         soqlQuery = preprocessQuery(soqlQuery);
         return setParams(soqlQuery);
@@ -251,7 +285,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     public List<Object> getParameters() {
-        logger.info("[PrepStat] getParameters IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getParameters IMPLEMENTED");
         int paramsCountInQuery = StringUtils.countMatches(soqlQuery, '?');
         logger.info("[PrepStat] getParameters   detected "+paramsCountInQuery+" parameters");
         logger.info("[PrepStat] getParameters   parameters provided "+parameters.size());
@@ -262,7 +296,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     protected String setParams(String soql) {
-        logger.info("[PrepStat] setParams IMPLEMENTED "+soql);
+        logger.info("[PrepStat] setParams IMPLEMENTED");
         String result = soql;
         for (Object param : getParameters()) {
             String paramRepresentation = convertToSoqlParam(param);
@@ -332,7 +366,7 @@ public class ForcePreparedStatement implements PreparedStatement {
             return null;
         }
         try {
-            logger.info("[PrepStat] dummyMetaData IMPLEMENTED ");
+            logger.info("[PrepStat] dummyMetaData IMPLEMENTED");
             RowSetMetaDataImpl result = new RowSetMetaDataImpl();
             int columnsCount = row.size();
             result.setColumnCount(columnsCount);
@@ -363,7 +397,7 @@ public class ForcePreparedStatement implements PreparedStatement {
 
     private ResultSetMetaData loadMetaData() throws SQLException {
         try {
-            logger.info("[PrepStat] loadMetaData IMPLEMENTED "+soqlQuery);
+            logger.info("[PrepStat] loadMetaData IMPLEMENTED");
             if (metadata == null) {
                 RowSetMetaDataImpl result = new RowSetMetaDataImpl();
                 SoqlQueryAnalyzer queryAnalyzer = getSoqlQueryAnalyzer();
@@ -395,7 +429,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private <T> List<T> flatten(List<T> listWithLists) {
-        logger.info("[PrepStat] flatten IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] flatten IMPLEMENTED");
         List<T> listPlain =  (List<T>) listWithLists.stream()
                 .flatMap(
                         def -> def instanceof Collection
@@ -409,7 +443,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     private List<FieldDef> fieldDefinitions;
 
     private List<FieldDef> getRootEntityFieldDefinitions() {
-        logger.info("[PrepStat] getFieldDefinitions IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getFieldDefinitions IMPLEMENTED");
         if (fieldDefinitions == null) {
             fieldDefinitions = getSoqlQueryAnalyzer().getFieldDefinitions();
             fieldDefinitions = flatten(fieldDefinitions);
@@ -426,7 +460,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     private DeleteQueryAnalyzer deleteQueryAnalyzer;
 
     private SoqlQueryAnalyzer getSoqlQueryAnalyzer() {
-        logger.info("[PrepStat] getSoqlQueryAnalyzer IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getSoqlQueryAnalyzer IMPLEMENTED");
         if (soqlQueryAnalyzer == null) {
             soqlQueryAnalyzer = new SoqlQueryAnalyzer(soqlQuery, (objName) -> {
                 try {
@@ -444,7 +478,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private SoslQueryAnalyzer getSoslQueryAnalyzer() {
-        logger.info("[PrepStat] getSoslQueryAnalyzer IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getSoslQueryAnalyzer IMPLEMENTED");
         if (soslQueryAnalyzer == null) {
             soslQueryAnalyzer = new SoslQueryAnalyzer(soqlQuery, (objName) -> {
                 try {
@@ -458,7 +492,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private InsertQueryAnalyzer getInsertQueryAnalyzer() {
-        logger.info("[PrepStat] getInsertQueryAnalyzer IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getInsertQueryAnalyzer IMPLEMENTED");
         if (insertQueryAnalyzer == null) {
             insertQueryAnalyzer = new InsertQueryAnalyzer(soqlQuery, (objName) -> {
                 try {
@@ -473,7 +507,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private UpdateQueryAnalyzer getUpdateQueryAnalyzer() {
-        logger.info("[PrepStat] getUpdateQueryAnalyzer IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getUpdateQueryAnalyzer IMPLEMENTED");
         if (updateQueryAnalyzer == null) {
             updateQueryAnalyzer = new UpdateQueryAnalyzer(soqlQuery, (objName) -> {
                 try {
@@ -488,7 +522,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private DeleteQueryAnalyzer getDeleteQueryAnalyzer() {
-        logger.info("[PrepStat] getDeleteQueryAnalyzer IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getDeleteQueryAnalyzer IMPLEMENTED");
         if (deleteQueryAnalyzer == null) {
             deleteQueryAnalyzer = new DeleteQueryAnalyzer(soqlQuery,
                     this::runResolveSubselect);
@@ -527,7 +561,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     public ResultSetMetaData getMetaData() throws SQLException {
-        logger.info("[PrepStat] getMetaData IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getMetaData IMPLEMENTED");
         return cacheMode == CacheMode.NO_CACHE
                 ? loadMetaData()
                 : metadataCache.computeIfAbsent(getCacheKey(), s -> {
@@ -541,7 +575,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     private PartnerService getPartnerService() throws ConnectionException {
-        logger.info("[PrepStat] getPartnerService IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getPartnerService IMPLEMENTED");
         if (partnerService == null) {
             logger.info("[PrepStat] getPartnerService creating service ");
             partnerService = new PartnerService(connection.getPartnerConnection());
@@ -573,13 +607,13 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     public void setArray(int i, Array x) throws SQLException {
-        logger.info("[PrepStat] setArray NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setArray NOT_IMPLEMENTED");
         throw new UnsupportedOperationException("The setArray is not implemented yet.");
     }
 
     public void setAsciiStream(int parameterIndex, InputStream x, int length)
             throws SQLException {
-        logger.info("[PrepStat] setAsciiStream NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setAsciiStream NOT_IMPLEMENTED");
         throw new UnsupportedOperationException("The setAsciiStream is not implemented yet.");
     }
 
@@ -589,7 +623,7 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     protected void addParameter(int parameterIndex, Object x) {
-        logger.info("[PrepStat] addParameter "+parameterIndex+" IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] addParameter "+parameterIndex+" IMPLEMENTED");
         parameterIndex--;
         if (parameters.size() < parameterIndex) {
             parameters.addAll(Collections.nCopies(parameterIndex - parameters.size(), null));
@@ -624,7 +658,7 @@ public class ForcePreparedStatement implements PreparedStatement {
 
     public void setCharacterStream(int parameterIndex, Reader reader, int length)
             throws SQLException {
-        logger.info("[PrepStat] setCharacterStream NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setCharacterStream NOT_IMPLEMENTED ");
         throw new UnsupportedOperationException("The setCharacterStream is not implemented yet.");
     }
 
@@ -639,7 +673,7 @@ public class ForcePreparedStatement implements PreparedStatement {
 
     public void setDate(int parameterIndex, Date x, Calendar cal)
             throws SQLException {
-        logger.info("[PrepStat] setDate NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setDate NOT_IMPLEMENTED ");
         throw new UnsupportedOperationException("The setDate is not implemented yet.");
     }
 
@@ -669,19 +703,19 @@ public class ForcePreparedStatement implements PreparedStatement {
     }
 
     public void setObject(int parameterIndex, Object x) throws SQLException {
-        logger.info("[PrepStat] setObject 1 NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setObject 1 NOT_IMPLEMENTED ");
         throw new UnsupportedOperationException("The setObject 1 is not implemented yet.");
     }
 
     public void setObject(int parameterIndex, Object x, int targetSqlType)
             throws SQLException {
-        logger.info("[PrepStat] setObject 2 NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setObject 2 NOT_IMPLEMENTED ");
         throw new UnsupportedOperationException("The setObject 2 is not implemented yet.");
     }
 
     public void setObject(int parameterIndex, Object x, int targetSqlType,
                           int scale) throws SQLException {
-        logger.info("[PrepStat] setObject 3 NOT_IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] setObject 3 NOT_IMPLEMENTED ");
         throw new UnsupportedOperationException("The setObject 3  is not implemented yet.");
     }
 
@@ -807,13 +841,13 @@ public class ForcePreparedStatement implements PreparedStatement {
 
     @Override
     public SQLWarning getWarnings() throws SQLException {
-        logger.info("[PrepStat] getWarnings IMPLEMENTED ");
+        logger.info("[PrepStat] getWarnings IMPLEMENTED");
         return resultSet != null ? resultSet.getWarnings() : warnings;
     }
 
     @Override
     public void clearWarnings() throws SQLException {
-        logger.info("[PrepStat] clearWarnings IMPLEMENTED ");
+        logger.info("[PrepStat] clearWarnings IMPLEMENTED");
         if(resultSet != null) {
             resultSet.clearWarnings();
         }
@@ -860,10 +894,10 @@ public class ForcePreparedStatement implements PreparedStatement {
     @Override
     public int getUpdateCount() throws SQLException {
         if (this.updateCountReturned) {
-            logger.info("[PrepStat] getUpdateCount Already Returned "+updateCount+" IMPLEMENTED "+soqlQuery);
+            logger.info("[PrepStat] getUpdateCount Already Returned "+updateCount+" IMPLEMENTED");
             return -1;
         }
-        logger.info("[PrepStat] getUpdateCount "+updateCount+" IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getUpdateCount "+updateCount+" IMPLEMENTED");
         this.updateCountReturned = true;
         return updateCount;
     }
@@ -871,11 +905,11 @@ public class ForcePreparedStatement implements PreparedStatement {
     @Override
     public boolean getMoreResults() throws SQLException {
         if (updateCount >=0 ) {
-            logger.info("[PrepStat] getMoreResults IMPLEMENTED (false) updateCount="+updateCount+" sql="+soqlQuery);
+            logger.info("[PrepStat] getMoreResults IMPLEMENTED (false) updateCount="+updateCount);
             return false;
         }
         boolean more = resultSet != null && resultSet.next();
-        logger.info("[PrepStat] getMoreResults IMPLEMENTED ("+more+") updateCount="+updateCount+" sql="+soqlQuery);
+        logger.info("[PrepStat] getMoreResults IMPLEMENTED ("+more+") updateCount="+updateCount);
         return more;
     }
 
@@ -922,7 +956,7 @@ public class ForcePreparedStatement implements PreparedStatement {
 
     @Override
     public Connection getConnection() throws SQLException {
-        logger.info("[PrepStat] getConnection IMPLEMENTED "+soqlQuery);
+        logger.info("[PrepStat] getConnection IMPLEMENTED");
         return connection;
     }
 
