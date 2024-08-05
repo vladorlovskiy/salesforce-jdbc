@@ -1,2 +1,2 @@
 source ~/java8
-mvn clean compile packgage install -P install-local -Duser.timezone="GMT-08:00"
+mvn clean compile package install -P install-local -Duser.timezone="GMT-08:00"
