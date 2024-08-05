@@ -7,15 +7,17 @@
         <artifactId>salesforce-jdbc</artifactId>
         <groupId>com.ascendix.salesforce</groupId>
         <version>${revision}</version>
-        <relativePath>../pom.xml</relativePath>
     </parent>
     <artifactId>sf-jdbc-driver</artifactId>
-
+    <groupId>com.ascendix.salesforce</groupId>
+    <version>${revision}</version>
+    <packaging>jar</packaging>
 
     <dependencies>
         <dependency>
             <groupId>com.ascendix.salesforce</groupId>
             <artifactId>sf-auth-client</artifactId>
+            <version>${revision}</version>
         </dependency>
         <dependency>
             <groupId>org.mule.tools</groupId>
