@@ -12,3 +12,5 @@ target
 /node_modules/
 /package-lock.json
 /sf-jdbc-driver/src/test/java/com/ascendix/jdbc/salesforce/ForceDriverConnectivityTest.java
+.flattened-pom.xml
+.m2/
