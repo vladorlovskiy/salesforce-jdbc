@@ -6,7 +6,7 @@
     <parent>
         <artifactId>salesforce-jdbc</artifactId>
         <groupId>com.ascendix.salesforce</groupId>
-        <version>${revision}</version>
+        <version>1.4.6-SNAPSHOT</version>
     </parent>
 
     <artifactId>sf-auth-client</artifactId>
